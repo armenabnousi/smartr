@@ -32,7 +32,7 @@ distributional = False
 # In[ ]:
 
 
-def predict_tomorrow(stock_name, d, model_outdir, weekly = False, window_size = 30, batch_size = 32, training_points = None, distributional = False, epochs = 20, sd_estimate_required = True, shuffle_buffer = None, training_verbosity = 2):
+def predict_tomorrow(stock_name, d, model_outdir, weekly = False, window_size = 30, batch_size = 32, training_points = None, distributional = False, epochs = 20, sd_estimate_required = True, shuffle_buffer = None, training_verbosity = 2, look_ahead_window = 1):
     d = d.loc[:,[stock_name]]
     if training_points is None:
         training_points = 350 if weekly else 1500
@@ -42,13 +42,13 @@ def predict_tomorrow(stock_name, d, model_outdir, weekly = False, window_size = 
         shuffle_buffer = d.shape[0] * 3
     train_d = d.iloc[:training_points, :]
     valid_d = d.iloc[training_points:, :]
-    train_df = windowed_dataset(train_d.to_numpy().reshape((len(train_d,))), window_size, batch_size, shuffle_buffer)
-    valid_df = windowed_dataset(valid_d.to_numpy().reshape((len(valid_d,))), window_size, batch_size, shuffle_buffer, shuffle = False)
+    train_df = windowed_dataset(train_d.to_numpy().reshape((len(train_d,))), window_size, batch_size, shuffle_buffer, look_ahead_window = look_ahead_window)
+    valid_df = windowed_dataset(valid_d.to_numpy().reshape((len(valid_d,))), window_size, batch_size, shuffle_buffer, look_ahead_window = look_ahead_window, shuffle = False)
     normalization_factors = train_d.max()
     model = train_model(train_df, valid_df, model_outdir, stock_name, epochs, distributional, window_size, training_verbosity)
     if sd_estimate_required:
-        train_sd_estimate, train_forecasts = get_sd_estimate(model, train_d, window_size)
-        valid_sd_estimate, valid_forecasts = get_sd_estimate(model, valid_d, window_size)
+        train_sd_estimate, train_forecasts = get_sd_estimate(model, train_d, window_size, look_ahead_window = look_ahead_window)
+        valid_sd_estimate, valid_forecasts = get_sd_estimate(model, valid_d, window_size, look_ahead_window = look_ahead_window)
     else:
         train_sd_estimate = None
         train_forecasts = None
@@ -63,16 +63,15 @@ def predict_tomorrow(stock_name, d, model_outdir, weekly = False, window_size = 
 
 
 # this function is copied from the deeplearning.ai course on time-series analysis on coursera! with minor modifications
-def windowed_dataset(series, window_size, batch_size, shuffle_buffer, shuffle = True):
+def windowed_dataset(series, window_size, batch_size, shuffle_buffer, shuffle = True, look_ahead_window = 1):
     dataset = tf.data.Dataset.from_tensor_slices(series)
-    dataset = dataset.window(window_size + 1, shift=1, drop_remainder=True)
-    dataset = dataset.flat_map(lambda window: window.batch(window_size + 1))
-    #dataset = dataset.map(lambda window: (window[:-1], window[-1]))
+    dataset = dataset.window(window_size + look_ahead_window, shift=1, drop_remainder=True)
+    dataset = dataset.flat_map(lambda window: window.batch(window_size + look_ahead_window))
     if shuffle:
-        dataset = dataset.shuffle(shuffle_buffer).map(lambda window: (tf.expand_dims(window[:-1], axis = -1), window[-1]))
+        dataset = dataset.shuffle(shuffle_buffer).map(lambda window: (tf.expand_dims(window[:-look_ahead_window], axis = -1), window[-1]))
         #dataset = dataset.map(lambda window: (window[0].reshape((len(window[0], 1))), window[1]))
     else:
-        dataset = dataset.map(lambda window: (tf.expand_dims(window[:-1], axis = -1), window[-1]))
+        dataset = dataset.map(lambda window: (tf.expand_dims(window[:-look_ahead_window], axis = -1), window[-1]))
         #dataset = dataset.map(lambda window: (window[:-1], window[-1]))
     dataset = dataset.batch(batch_size).prefetch(1)
     return dataset
@@ -218,31 +217,31 @@ def train_model(train_df, valid_df, model_outdir, stock_name, epochs, distributi
 # In[168]:
 
 
-def get_sd_estimate(model, train_d, window_size):
+def get_sd_estimate(model, train_d, window_size, look_ahead_window = 1):
     forecasts_x = []
     sds = []
     #indices = [j for j in range(x.get_shape()[0])]      
     #print(indices)
     vs = np.array(train_d)
     #xs = list(x[i,:,:] for i in indices)
-    for time in range(len(train_d) - window_size):
+    for time in range(len(train_d) - window_size - look_ahead_window + 1):
         prediction = model.predict(vs[time:time+window_size].reshape((1, window_size, 1)))
         forecasts_x.append(prediction)
-        sds.append(prediction - vs[time+window_size])
-    sd_estimate = np.sqrt(np.sum(np.array(sds)**2) / (train_d.shape[0] - window_size - 1))
+        sds.append(prediction - vs[time+window_size+look_ahead_window-1])
+    sd_estimate = np.sqrt(np.sum(np.array(sds)**2) / (train_d.shape[0] - window_size -look_ahead_window + 1 - 1))
     #print(train_d.shape[0] - window_size - 1)
-    forecasts_x = np.array(forecasts_x)[:,0].reshape((train_d.shape[0] - window_size))
+    forecasts_x = np.array(forecasts_x)[:,0].reshape((train_d.shape[0] - window_size - look_ahead_window + 1))
     return sd_estimate, forecasts_x
 
 
 # In[178]:
 
 
-def plot_predictions(d, forecasts, sd_estimate, window_size, limit_begin = 0, limit_end = None, ax = None, legend = True):
+def plot_predictions(d, forecasts, sd_estimate, window_size, limit_begin = 0, limit_end = None, ax = None, legend = True, look_ahead_window = 1):
     if limit_end is None:
-        observed = np.array(d[(window_size + limit_begin):])
+        observed = np.array(d[(window_size + look_ahead_window - 1 + limit_begin):])
     else:
-        observed = np.array(d[(window_size + limit_begin):(window_size + limit_end)])
+        observed = np.array(d[(window_size + look_ahead_window - 1 + limit_begin):(window_size + look_ahead_window -1 + limit_end)])
     if ax is None:
         plt.plot(observed, '.', label = 'observed')
         plt.plot(forecasts[limit_begin:limit_end], '.', label = 'predicted')
