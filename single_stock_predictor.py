@@ -166,8 +166,12 @@ def create_model(distributional, window_size):
       #tf.keras.layers.LSTM(64, return_sequences=True, kernel_initializer = initializers, activation = activation_name),
       #tf.keras.layers.LSTM(128, return_sequences=True, kernel_initializer = initializers),
       #tf.keras.layers.Dropout(0.1),
-      #tf.keras.layers.GRU(8, return_sequences=True, kernel_initializer = initializers),
-      tf.keras.layers.GRU(64, kernel_initializer = initializers, activation = activation_name, input_shape = (window_size, 1)),
+      #tf.keras.layers.GRU(32, return_sequences=True, kernel_initializer = initializers, activation = activation_name, input_shape = (window_size, 1)),
+      tf.keras.layers.SimpleRNN(128, kernel_initializer = initializers, activation = activation_name, input_shape = (window_size, 1), return_sequences = True),
+      #tf.keras.layers.Dropout(0.1),
+      tf.keras.layers.SimpleRNN(128, kernel_initializer = initializers, activation = activation_name, return_sequences = False),
+      #tf.keras.layers.Dropout(0.5),
+      #tf.keras.layers.SimpleRNN(128, kernel_initializer = initializers, activation = activation_name),
       #tf.keras.layers.LSTM(32, kernel_initializer = initializers, activation = activation_name),
       #tf.keras.layers.Dense(output_dense_size, activation = tf.keras.layers.Activation(lambda x: activations(x, np.mean(train_d)[0], np.std(train_d)[0], window_size)), kernel_initializer = "he_normal"),
       #tf.keras.layers.Lambda(layer_normalize, arguments={'factors': normalization_factors, 'denorm' : True}),
@@ -209,7 +213,7 @@ def train_model(train_df, valid_df, model_outdir, stock_name, epochs, distributi
     model.compile(optimizer=tf.keras.optimizers.Adam(), loss=loss_function)
     model_output = model_outdir + '/' + stock_name + '.mdl_wts.hdf5'
     model_checkpoint = tf.keras.callbacks.ModelCheckpoint(model_output, save_best_only=True, monitor='val_loss', mode='min')
-    model.fit(train_df, epochs=20, validation_data = valid_df, callbacks = [model_checkpoint], verbose = training_verbosity)
+    model.fit(train_df, epochs=epochs, validation_data = valid_df, callbacks = [model_checkpoint], verbose = training_verbosity)
     model.load_weights(model_output)
     return model
 
