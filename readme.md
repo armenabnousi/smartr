@@ -1,9 +1,7 @@
 ## Stock MARket Trade Recommender:
 
 In the basis of Modern Portfolio Theory lies the assertion that by diversifying our assets (investing in many different instruments) we can minimize the risk. ( Rememeber variance of a linear combination of random variables can b
-e computed using: 
-$$ Var(\sum\limits_{i=1}^{N}{X_i})=\sum\limits_{i=1}^{N}{a_i^{2}Var(X_i)} + 2\sum\limits_{1\le i<j\le N}{a_ia_jCov(X_{i},X_{j})} $$ 
-).
+e computed by sum of combination of variances and pairwise covariances).
 
 Smartr consists of two general steps. In the first step it predicts future return rate and return risk (variance). In the second step, for a given *desired return rate* it computes a combination of stock shares that can will minimize the portfolio risk.
  
