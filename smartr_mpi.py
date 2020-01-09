@@ -28,10 +28,11 @@ read_data = False
 read_updated_data = True
 get_business_info = False #you can go through business info field to exlude companies you don't want to invest in
 if get_updated_data or get_business_info:
+    read_data = True
     read_tickers = True
 temp_rates_dir="temp_rates_risks"
 models_dir="models"
-candidate_companies_filename="candidate_companies_test.txt"
+candidate_companies_filename="candidate_companies.txt"
 
 weekly = False
 window_size = 30
@@ -44,6 +45,9 @@ sd_estimate_required = True
 training_verbosity = 0
 look_ahead_window = 5
 
+comm = MPI.COMM_WORLD
+rank = comm.rank
+size = comm.size
 
 def download_tickers():
     get_ipython().system('curl -o nasdaqtraded_companylist.txt ftp://ftp.nasdaqtrader.com/symboldirectory/nasdaqtraded.txt')
@@ -67,15 +71,6 @@ def download_tickers():
     with open('sym_data.pkl', 'wb') as symfile:
         pickle.dump(sym_data, symfile)
     return(sym_data)
-if get_tickers:
-    sym_data = download_tickers()
-
-
-if read_tickers:
-    with open('sym_data.pkl', 'rb') as symfile:
-        sym_data = pickle.load(symfile)
-        tickers, failed = sym_data['tickers'], sym_data['failed']
-
 
 def download_business_info(tickers):
     for ticker in tickers.keys():
@@ -83,9 +78,6 @@ def download_business_info(tickers):
         tickers[ticker]['business_summary'] = tickers[ticker]['ticker'].info.get('longBusinessSummary', None)
     with open('sym_data.pkl', 'wb') as symfile:
         pickle.dump(sym_data, symfile)
-if get_business_info:
-    download_business_info(tickers)
-
 
 def download_histories(tickers):
     period = "9y"
@@ -93,9 +85,6 @@ def download_histories(tickers):
     with open("daily_history_9y.pkl", 'wb') as histfile:
         pickle.dump(d, histfile)
     return d
-if get_histories:
-    d = download_histories(sym_data['tickers'])
-
 
 def download_ticker_histories(tickers, start = None, period = None, end = None, interval = "1d", columns = ['Open']):
     msft = yf.Ticker("MSFT")
@@ -114,12 +103,6 @@ def download_ticker_histories(tickers, start = None, period = None, end = None, 
         d[i] = hist
     return d
 
-
-if read_data:
-    with open("daily_history_9y.pkl", 'rb') as infile:
-        d = pickle.load(infile)
-
-
 def update_data(d, tickers, columns = ['Open']):
     last_date = (pd.to_datetime(d.index.values[-1])).strftime("%Y-%m-%d")
     d_update = download_ticker_histories(tickers, start = last_date, interval = "1d", columns = columns)
@@ -129,13 +112,40 @@ def update_data(d, tickers, columns = ['Open']):
     with open("daily_history_updated.pkl", 'wb') as histfile:
         pickle.dump(d_merged, histfile)
     return d_merged
-if get_updated_data:
-    d = update_data(d, tickers, columns = ['Open'])
 
+if rank == 0:
+    if get_tickers:
+        sym_data = download_tickers()
+
+    if read_tickers:
+        with open('sym_data.pkl', 'rb') as symfile:
+            sym_data = pickle.load(symfile)
+            tickers, failed = sym_data['tickers'], sym_data['failed']
+
+    if get_business_info:
+        download_business_info(tickers)
+
+    if get_histories:
+        d = download_histories(sym_data['tickers'])
+
+    if read_data:
+        with open("daily_history_9y.pkl", 'rb') as infile:
+            d = pickle.load(infile)
+
+    if get_updated_data:
+        d = update_data(d, tickers, columns = ['Open'])
+    print("rank 0 done with preparing the data")
+    sys.stdout.flush()
+comm.Barrier()
+
+if read_data:
+    with open("daily_history_9y.pkl", 'rb') as infile:
+        d = pickle.load(infile)
 
 if read_updated_data:
     with open("daily_history_updated.pkl", 'rb') as infile:
         d = pickle.load(infile)
+
 
 def remove_na_stocks(d):
     #backward-filling na's 
@@ -149,6 +159,9 @@ def remove_na_stocks(d):
     return d
 
 d = remove_na_stocks(d)
+print(np.where(d.isna().sum()>0))
+if get_business_info:
+    download_business_info(tickers)
 if candidate_companies_filename is not None:
     with open(candidate_companies_filename, 'r') as infile:
         candidate_companies = infile.read().split()
@@ -156,18 +169,18 @@ if candidate_companies_filename is not None:
 else:
     candidate_companies = list(d.columns.values)
 
-comm = MPI.COMM_WORLD
-rank = comm.rank
-size = comm.size
 if rank == 0:
     print("running with ", size, "processors, for ", len(candidate_companies), "companies")
 
 rank_share = int(np.ceil(len(candidate_companies)/size))
-rank_indices = candidate_companies[(rank * rank_share):min(len(candidate_companies),((1+rank) * rank_share))]
+rank_companies = candidate_companies[(rank * rank_share):min(len(candidate_companies),((1+rank) * rank_share))]
 if rank == 0:
     print("each rank will process", rank_share, "companies out of", len(candidate_companies))
-sys.stdout.flush()
 
+print("rank", rank, "start", (rank * rank_share), "end", min(len(candidate_companies),((1+rank) * rank_share)))
+print("rank", rank, rank_companies)
+sys.stdout.flush()
+comm.Barrier()
 
 #stock_name = "MSFT"
 try:
@@ -177,7 +190,7 @@ except FileExistsError:
 
 rate_and_risks = pd.DataFrame({'price':[0]*rank_share, 'train_sd':[0]*rank_share, 'name':['stock']*rank_share,
 				'valid_sd':[0]*rank_share, 'prediction':[0]*rank_share})
-for index_number, stock_name in enumerate(rank_indices):
+for index_number, stock_name in enumerate(rank_companies):
     pred, train_sd, train_forecasts, valid_sd, valid_forecasts = single_stock_predictor.predict_tomorrow(stock_name, d, model_outdir = models_dir, weekly = weekly, training_points = training_points, window_size = window_size, batch_size = batch_size, distributional = distributional, epochs = epochs, sd_estimate_required = sd_estimate_required, shuffle_buffer = shuffle_buffer, training_verbosity = training_verbosity, look_ahead_window = look_ahead_window)
     rate_and_risks.iloc[index_number, :] = [d.iloc[d.shape[0]-1][stock_name], train_sd, stock_name, valid_sd, pred]
 try:
@@ -186,7 +199,7 @@ except FileExistsError:
     pass
 
 rate_and_risks.to_csv(os.path.join(temp_rates_dir, "rates_" + str(rank) + ".csv"), index = False)
-
+print(rank, "finished with loop")
 comm.Barrier()
 
 if rank == 0:
@@ -197,6 +210,7 @@ if rank == 0:
     for filename in filenames:
         final_rates = pd.concat([final_rates, pd.read_csv(os.path.join(temp_rates_dir, filename))], axis = 0)
     final_rates.to_csv("rates_and_risks.csv", index = False)
+
 '''
 # In[ ]:
 
