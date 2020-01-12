@@ -32,7 +32,7 @@ distributional = False
 # In[ ]:
 
 
-def predict_tomorrow(stock_name, d, model_outdir, weekly = False, window_size = 30, batch_size = 32, training_points = None, distributional = False, epochs = 20, sd_estimate_required = True, shuffle_buffer = None, training_verbosity = 2, look_ahead_window = 1):
+def predict_tomorrow(stock_name, d, model_outdir, weekly = False, window_size = 30, batch_size = 32, training_points = None, distributional = False, epochs = 20, model_sd_estimate_required = True, shuffle_buffer = None, training_verbosity = 2, look_ahead_window = 1):
     d = d.loc[:,[stock_name]]
     if training_points is None:
         training_points = 350 if weekly else 1500
@@ -46,19 +46,32 @@ def predict_tomorrow(stock_name, d, model_outdir, weekly = False, window_size = 
     valid_df = windowed_dataset(valid_d.to_numpy().reshape((len(valid_d,))), window_size, batch_size, shuffle_buffer, look_ahead_window = look_ahead_window, shuffle = False)
     normalization_factors = train_d.max()
     model = train_model(train_df, valid_df, model_outdir, stock_name, epochs, distributional, window_size, training_verbosity)
-    if sd_estimate_required:
-        train_sd_estimate, train_forecasts = get_sd_estimate(model, train_d, window_size, look_ahead_window = look_ahead_window)
-        valid_sd_estimate, valid_forecasts = get_sd_estimate(model, valid_d, window_size, look_ahead_window = look_ahead_window)
+    if model_sd_estimate_required:
+        model_train_sd_estimate, train_forecasts = get_model_sd_estimate(model, train_d, window_size, look_ahead_window = look_ahead_window)
+        model_valid_sd_estimate, valid_forecasts = get_model_sd_estimate(model, valid_d, window_size, look_ahead_window = look_ahead_window)
     else:
-        train_sd_estimate = None
+        model_train_sd_estimate = None
         train_forecasts = None
-        valid_sd_estimate = None
+        model_valid_sd_estimate = None
         valid_forecasts = None	
-
+    train_sd_estimate = get_sd_estimate(train_d, look_ahead_window)
+    valid_sd_estimate = get_sd_estimate(valid_d, look_ahead_window)
     tomorrows_prediction = model.predict(np.array(d[stock_name])[-window_size:].reshape(1, window_size, 1))[0, 0]
-    return tomorrows_prediction, train_sd_estimate, train_forecasts, valid_sd_estimate, valid_forecasts
+    return tomorrows_prediction, train_sd_estimate, valid_sd_estimate, model_train_sd_estimate, train_forecasts, model_valid_sd_estimate, valid_forecasts
 
-
+def get_sd_estimate(data, window_size = 2, biased = True):
+    if window_size < 2:
+        window_size = 2
+    data = np.flip(np.array(data[(data.shape[0]%window_size):])).reshape( (int(data.shape[0]/window_size), window_size) )
+    varnces = np.var(data, axis = 1)
+    #print(varnces)
+    #print(np.sum(varnces * (window_size - 1)))
+    if biased:
+        sd_estimate = np.sqrt( np.sum(varnces * (window_size - 1)) / (window_size * data.shape[0]) )
+    else:
+        sd_estimate = np.sqrt( np.sum(varnces * (window_size - 1)) / ((window_size - 1) * (data.shape[0])) )
+    return sd_estimate
+    
 # In[202]:
 
 
@@ -221,7 +234,7 @@ def train_model(train_df, valid_df, model_outdir, stock_name, epochs, distributi
 # In[168]:
 
 
-def get_sd_estimate(model, train_d, window_size, look_ahead_window = 1):
+def get_model_sd_estimate(model, train_d, window_size, look_ahead_window = 1):
     forecasts_x = []
     sds = []
     #indices = [j for j in range(x.get_shape()[0])]      
@@ -266,4 +279,63 @@ def plot_predictions(d, forecasts, sd_estimate, window_size, limit_begin = 0, li
 
 
 
+#funnction copied from matplotlib gallery
+def heatmap(data, row_labels, col_labels, ax=None,
+            cbar_kw={}, cbarlabel="", **kwargs):
+    """
+    Create a heatmap from a numpy array and two lists of labels.
 
+    Parameters
+    ----------
+    data
+        A 2D numpy array of shape (N, M).
+    row_labels
+        A list or array of length N with the labels for the rows.
+    col_labels
+        A list or array of length M with the labels for the columns.
+    ax
+        A `matplotlib.axes.Axes` instance to which the heatmap is plotted.  If
+        not provided, use current axes or create a new one.  Optional.
+    cbar_kw
+        A dictionary with arguments to `matplotlib.Figure.colorbar`.  Optional.
+    cbarlabel
+        The label for the colorbar.  Optional.
+    **kwargs
+        All other arguments are forwarded to `imshow`.
+    """
+
+    if not ax:
+        ax = plt.gca()
+
+    # Plot the heatmap
+    im = ax.imshow(data, **kwargs)
+
+    # Create colorbar
+    cbar = ax.figure.colorbar(im, ax=ax, **cbar_kw)
+    cbar.ax.set_ylabel(cbarlabel, rotation=-90, va="bottom")
+
+    # We want to show all ticks...
+    ax.set_xticks(np.arange(data.shape[1]))
+    ax.set_yticks(np.arange(data.shape[0]))
+    # ... and label them with the respective list entries.
+    ax.set_xticklabels(col_labels)
+    ax.set_yticklabels(row_labels)
+
+    # Let the horizontal axes labeling appear on top.
+    ax.tick_params(top=True, bottom=False,
+                   labeltop=True, labelbottom=False)
+
+    # Rotate the tick labels and set their alignment.
+    plt.setp(ax.get_xticklabels(), rotation=-30, ha="right",
+             rotation_mode="anchor")
+
+    # Turn spines off and create white grid.
+    for edge, spine in ax.spines.items():
+        spine.set_visible(False)
+
+    ax.set_xticks(np.arange(data.shape[1]+1)-.5, minor=True)
+    ax.set_yticks(np.arange(data.shape[0]+1)-.5, minor=True)
+    ax.grid(which="minor", color="w", linestyle='-', linewidth=3)
+    ax.tick_params(which="minor", bottom=False, left=False)
+
+    return im, cbar
